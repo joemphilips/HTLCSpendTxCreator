@@ -150,7 +150,7 @@ namespace HTLCSpendTxCreator
       var swapTxId = uint256.Parse(txidHex);
       var spk = inputType == null || inputType == InputType.Wsh ? (IDestination)redeemScript.WitHash :
         inputType == InputType.ShWsh ? redeemScript.WitHash.ScriptPubKey.Hash : default;
-      var txo = new TxOut(amountSatoshi, spk);
+      var txo = new TxOut((long)amountSatoshi, spk);
       var c = new Coin(new OutPoint(swapTxId, prevOutIndex), txo);
       var sc = new ScriptCoin(c, redeemScript);
       txb.AddCoins(sc);
