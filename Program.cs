@@ -3,6 +3,7 @@ using System.CommandLine;
 using System.CommandLine.Builder;
 using System.CommandLine.Invocation;
 using System.CommandLine.Parsing;
+using System.Linq;
 using System.Net.Security;
 using NBitcoin;
 using System.Threading.Tasks;
@@ -33,7 +34,7 @@ namespace HTLCSpendTxCreator
         byte[] b;
         try
         {
-          b = hexEncoder.DecodeData(v);
+          b = hexEncoder.DecodeData(v.Replace("\"", "").Trim());
         }
         catch (Exception e)
         {
@@ -62,7 +63,7 @@ namespace HTLCSpendTxCreator
       txidOpt.AddValidator(hexValidator(b => b.Length != 32 ? "txid must be 32 bytes" : null));
       root.AddOption(txidOpt);
 
-      var feeRateOpt = new Option<int>(new[] {"--feerate", "--fee", "-f"}, "feerate for the tx (satoshi per vbytes)")
+      var feeRateOpt = new Option<int>(new[] {"--feerate", "--fee", "-f"}, "feerate for the tx (satoshi per 1000 vbytes)")
       {
         Argument = new Argument<int>
         {
@@ -144,29 +145,38 @@ namespace HTLCSpendTxCreator
       if (n is null) throw new Exception($"Unsupported network {networkName}");
       var txb = n.CreateTransactionBuilder();
       var hex = new HexEncoder();
-      Console.WriteLine($"Redeem Hex {redeem}");
       var redeemScript =
         new Script(hex.DecodeData(redeem));
       var swapTxId = uint256.Parse(txidHex);
-      var swapVout = prevOutIndex;
-      var spk = inputType == null || inputType == InputType.Wsh ? redeemScript.WitHash.ScriptPubKey :
-        inputType == InputType.ShWsh ? redeemScript.WitHash.ScriptPubKey.Hash.ScriptPubKey : default;
+      var spk = inputType == null || inputType == InputType.Wsh ? (IDestination)redeemScript.WitHash :
+        inputType == InputType.ShWsh ? redeemScript.WitHash.ScriptPubKey.Hash : default;
       var txo = new TxOut(amountSatoshi, spk);
-      var c = new Coin(new OutPoint(swapTxId, swapVout), txo);
+      var c = new Coin(new OutPoint(swapTxId, prevOutIndex), txo);
       var sc = new ScriptCoin(c, redeemScript);
       txb.AddCoins(sc);
       var feeRate = new FeeRate(feeRateSatPerKBytes / 1000m);
       txb.SendEstimatedFees(feeRate);
       var claimPrivKey = new Key(hex.DecodeData(privKeyHex));
       txb.AddKeys(claimPrivKey);
-      var alicePayoutAddress = BitcoinAddress.Create(addr, n);
+      BitcoinAddress alicePayoutAddress;
+      try
+      {
+        alicePayoutAddress = BitcoinAddress.Create(addr, n);
+      }
+      catch (Exception ex)
+      {
+        Console.WriteLine("Failed to parse destination address. maybe mismatching network? " + ex.Message);
+        return;
+      }
+
       txb.SendAll(alicePayoutAddress);
       var tx = txb.BuildTransaction(false);
+
       var signature = tx.SignInput(claimPrivKey, sc);
       var preimage = hex.DecodeData(preimageHex);
       var witnessItems =
-        new WitScript(Op.GetPushOp(preimage)) +
         new WitScript(Op.GetPushOp(signature.ToBytes())) +
+        new WitScript(Op.GetPushOp(preimage)) +
         new WitScript(Op.GetPushOp(redeemScript.ToBytes()));
       tx.Inputs[0].WitScript = witnessItems;
       Console.WriteLine(tx.ToHex());
@@ -179,16 +189,16 @@ namespace HTLCSpendTxCreator
       rootCommand.Handler = CommandHandler.Create((ParseResult pr) =>
       {
         Run(
-          pr.RootCommandResult.OptionResult("--redeem")?.GetValueOrDefault<string>(),
-          pr.RootCommandResult.OptionResult("--txid")?.GetValueOrDefault<string>(),
+          pr.RootCommandResult.OptionResult("--redeem")?.GetValueOrDefault<string>()?.Trim().Replace("\"", ""),
+          pr.RootCommandResult.OptionResult("--txid")?.GetValueOrDefault<string>()?.Trim().Replace("\"", ""),
           pr.RootCommandResult.OptionResult("--fee")!.GetValueOrDefault<int>(),
           pr.RootCommandResult.OptionResult("--amount")!.GetValueOrDefault<int>(),
           pr.RootCommandResult.OptionResult("--outindex")!.GetValueOrDefault<int>(),
-          pr.RootCommandResult.OptionResult("--privkey")?.GetValueOrDefault<string>(),
-          pr.RootCommandResult.OptionResult("--preimage")?.GetValueOrDefault<string>(),
-          pr.RootCommandResult.OptionResult("--address")?.GetValueOrDefault<string>(),
+          pr.RootCommandResult.OptionResult("--privkey")?.GetValueOrDefault<string>()?.Trim().Replace("\"", ""),
+          pr.RootCommandResult.OptionResult("--preimage")?.GetValueOrDefault<string>()?.Trim().Replace("\"", ""),
+          pr.RootCommandResult.OptionResult("--address")?.GetValueOrDefault<string>()?.Trim().Replace("\"", ""),
           pr.RootCommandResult.OptionResult("--input-type")?.GetValueOrDefault<InputType>(),
-          pr.RootCommandResult.OptionResult("--network")?.GetValueOrDefault<string>()
+          pr.RootCommandResult.OptionResult("--network")?.GetValueOrDefault<string>()?.Trim().Replace("\"", "")
         );
       });
       var cli = new CommandLineBuilder(rootCommand).UseDefaults().Build();
